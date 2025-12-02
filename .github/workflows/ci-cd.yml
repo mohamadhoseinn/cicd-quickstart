@@ -1,4 +1,4 @@
-name: CI/CD with Caddy
+name: CI/CD with Caddy (cached)
 
 on:
   push:
@@ -12,6 +12,25 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+
+      # کش کردن فایل اجرایی Caddy
+      - name: Cache Caddy
+        uses: actions/cache@v3
+        with:
+          path: caddy/caddy.exe
+          key: caddy-exe
+
+      # دانلود فقط اگر فایل وجود نداشت
+      - name: Ensure Caddy exists
+        run: |
+          if (-Not (Test-Path "caddy\caddy.exe")) {
+            Write-Host "Caddy not found in cache, downloading..."
+            Invoke-WebRequest "https://caddyserver.com/api/download?os=windows&arch=amd64" -OutFile caddy.exe
+            mkdir caddy -Force
+            Move-Item caddy.exe caddy\
+          } else {
+            Write-Host "Caddy found in cache, skipping download."
+          }
 
       # نصب و اجرای backend
       - name: Install backend dependencies
@@ -41,4 +60,4 @@ jobs:
       - name: Reload Caddy
         run: |
           Stop-Process -Name "caddy" -ErrorAction SilentlyContinue
-          Start-Process ".\caddy\caddy.exe" -ArgumentList "run --config Caddyfile"
+          Start-Process "D:\cicdproject\caddy\caddy.exe" -ArgumentList "run --config D:\cicdproject\caddy\Caddyfile"
