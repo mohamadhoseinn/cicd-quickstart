@@ -1,4 +1,4 @@
-name: CI/CD with Caddy (cached)
+name: CI/CD with Caddy
 
 on:
   push:
@@ -13,23 +13,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Cache Caddy
-        uses: actions/cache@v3
-        with:
-          path: caddy/caddy.exe
-          key: caddy-exe
-
-      - name: Ensure Caddy exists
-        run: |
-          if (-Not (Test-Path "caddy\caddy.exe")) {
-           Write-Host "Caddy not found in cache, downloading..."
-           Invoke-WebRequest "https://caddyserver.com/api/download?os=windows&arch=amd64" -OutFile caddy.exe
-          `mkdir caddy -Force
-           Move-Item caddy.exe caddy\
-          } else {
-          Write-Host "Caddy found in cache, skipping download."
-          }
-
+      # نصب و اجرای backend
       - name: Install backend dependencies
         run: |
           cd backend
@@ -40,18 +24,21 @@ jobs:
           Stop-Process -Name "node" -ErrorAction SilentlyContinue
           Start-Process "node" -ArgumentList "backend/server.js"
 
+      # نصب و build فرانت‌اند
       - name: Install frontend dependencies
         run: |
           cd frontend
           npm install
           npm run build
 
+      # کپی خروجی build به پوشه‌ی Caddy
       - name: Copy frontend build to Caddy folder
         run: |
           Remove-Item -Recurse -Force caddy/frontend/dist -ErrorAction SilentlyContinue
           Copy-Item -Path frontend/dist -Destination caddy/frontend/dist -Recurse
 
-      - name: Run Caddy
+      # اجرای مجدد Caddy برای دیدن تغییرات
+      - name: Reload Caddy
         run: |
           Stop-Process -Name "caddy" -ErrorAction SilentlyContinue
-          Start-Process ".\caddy\caddy.exe" -ArgumentList "run --config caddy/Caddyfile"
+          Start-Process ".\caddy\caddy.exe" -ArgumentList "run --config Caddyfile"
