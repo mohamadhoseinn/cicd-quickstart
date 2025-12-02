@@ -1,4 +1,4 @@
-name: CI/CD with Caddy (cached)
+name: CI/CD with Caddy
 
 on:
   push:
@@ -10,105 +10,93 @@ jobs:
     runs-on: self-hosted
 
     steps:
+      # دریافت کد
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Cache Caddy
-        uses: actions/cache@v3
-        with:
-          path: caddy/caddy.exe
-          key: caddy-exe
+      # 1. توقف سرویس‌های قبلی
+      - name: Stop old services
+        run: |
+          taskkill /F /IM node.exe /T 2>nul || echo "No node processes"
+          taskkill /F /IM caddy.exe /T 2>nul || echo "No caddy processes"
+          timeout /t 3 /nobreak
 
-      - name: Ensure Caddy exists
+      # 2. دانلود Caddy (اگر نیاز است)
+      - name: Setup Caddy
         run: |
           if (-Not (Test-Path "caddy\caddy.exe")) {
-            Write-Host "Caddy not found in cache, downloading..."
+            echo "Downloading Caddy..."
             Invoke-WebRequest "https://github.com/caddyserver/caddy/releases/download/v2.7.6/caddy_2.7.6_windows_amd64.zip" -OutFile caddy.zip
-            Expand-Archive caddy.zip -DestinationPath caddy_tmp
+            Expand-Archive caddy.zip -DestinationPath .\caddy_temp
             mkdir caddy -Force
-            Move-Item caddy_tmp/caddy.exe caddy\
-            Remove-Item caddy.zip, caddy_tmp -Recurse -Force
-          } else {
-            Write-Host "Caddy found in cache, skipping download."
+            Move-Item .\caddy_temp\caddy.exe .\caddy\
+            Remove-Item caddy.zip, caddy_temp -Recurse -Force
           }
 
-      # توقف سرویس‌های قبلی
-      - name: Stop existing services
-        run: |
-          Stop-Process -Name "node" -ErrorAction SilentlyContinue
-          Stop-Process -Name "caddy" -ErrorAction SilentlyContinue
-          timeout /t 2 /nobreak
-
-      # شروع backend
-      - name: Install and start backend
+      # 3. اجرای Backend
+      - name: Start Backend
         run: |
           cd backend
           npm install
-          # اجرای بک‌اند در پس‌زمینه
-          Start-Process "node" -ArgumentList "server.js" -WorkingDirectory "$PWD"
+
+          # اجرای backend در پس‌زمینه
+          $backend = Start-Process node -ArgumentList "server.js" -PassThru -WindowStyle Hidden
+          $backend.Id | Out-File "..\backend_pid.txt"
+
+          # منتظر بمان
           timeout /t 5 /nobreak
 
-      # Build فرانت‌اند
-      - name: Build frontend
+          # تست backend
+          curl http://localhost:3001/api/hello || echo "Backend test failed"
+
+      # 4. Build Frontend
+      - name: Build Frontend
         run: |
           cd frontend
           npm install
           npm run build
 
-          # بررسی خروجی build
-          if (Test-Path "dist/index.html") {
-            Write-Host "✅ Frontend build successful"
-          } else {
-            Write-Error "❌ Frontend build failed"
-            exit 1
-          }
+          # کپی به پوشه Caddy
+          mkdir ..\caddy\www -Force
+          Copy-Item dist\* ..\caddy\www -Recurse -Force
 
-      # کپی فایل‌های build شده
-      - name: Copy build to Caddy folder
-        run: |
-          # ایجاد پوشه‌های لازم
-          mkdir -Force caddy\frontend
-          # کپی فایل‌های build
-          Copy-Item -Path frontend\dist\* -Destination caddy\frontend -Recurse -Force
-
-          # کپی Caddyfile
-          Copy-Item -Path caddy\Caddyfile -Destination caddy\frontend\Caddyfile -Force
-
-      # اجرای Caddy با پورت قابل دسترسی
-      - name: Start Caddy server
+      # 5. اجرای Caddy
+      - name: Start Caddy
         run: |
           cd caddy
-          # اجرای Caddy در پیش‌زمینه (نه پس‌زمینه)
-          Write-Host "Starting Caddy on port 8080..."
-          $caddyProcess = Start-Process ".\caddy.exe" `
-            -ArgumentList "run --config .\Caddyfile --adapter caddyfile" `
-            -NoNewWindow `
-            -PassThru
 
-          # ذخیره Process ID برای مدیریت بعدی
-          $caddyProcess.Id | Out-File "caddy_pid.txt"
-
-          # منتظر بمان تا Caddy کامل بالا بیاید
-          timeout /t 10 /nobreak
-
-          # تست اتصال
-          $response = Invoke-WebRequest "http://localhost:8080" -Method GET -ErrorAction SilentlyContinue
-          if ($response.StatusCode -eq 200) {
-            Write-Host "✅ Caddy is running on port 8080"
-          } else {
-            Write-Host "⚠️  Could not verify Caddy. Checking processes..."
-            Get-Process caddy, node
+          # مطمئن شو Caddyfile وجود دارد
+          if (-Not (Test-Path "Caddyfile")) {
+            @'
+            :8080 {
+                root * ./www
+                file_server
+                try_files {path} /index.html
+                
+                handle /api/* {
+                    reverse_proxy localhost:3001
+                }
+            }
+            '@ | Out-File Caddyfile -Encoding UTF8
           }
 
-      # نمایش اطلاعات برای دیباگ
-      - name: Debug info
+          # اجرای Caddy
+          Start-Process ".\caddy.exe" -ArgumentList "run --config Caddyfile" -WindowStyle Hidden
+
+          # منتظر بمان
+          timeout /t 5 /nobreak
+
+          # تست Caddy
+          curl http://localhost:8080 || echo "Caddy test failed"
+
+      # 6. نمایش وضعیت
+      - name: Show Status
         run: |
-          Write-Host "=== Network Connections ==="
-          netstat -ano | findstr :8080
-          netstat -ano | findstr :3001
-
-          Write-Host "=== Running Processes ==="
-          Get-Process caddy, node | Format-Table Id, Name, MainWindowTitle
-
-          Write-Host "=== Directory Structure ==="
-          Get-ChildItem caddy\frontend -Recurse | Select-Object Name, Length | Format-Table
+          echo "=== Checking Services ==="
+          echo "Backend PID:"; Get-Content backend_pid.txt -ErrorAction SilentlyContinue
+          echo ""
+          echo "=== Ports ==="
+          netstat -ano | findstr ":8080 :3001" || echo "Ports not found"
+          echo ""
+          echo "=== Processes ==="
+          tasklist | findstr "node.exe caddy.exe" || echo "Processes not found"
