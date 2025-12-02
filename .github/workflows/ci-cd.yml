@@ -1,4 +1,4 @@
-name: CI/CD Windows
+name: CI/CD Windows PowerShell
 
 on:
   push:
@@ -16,128 +16,215 @@ jobs:
 
       # 2. توقف سرویس‌های قبلی
       - name: Stop Old Services
-        shell: cmd
+        shell: pwsh
         run: |
-          taskkill /F /IM node.exe >nul 2>&1
-          echo No node processes running
+          Write-Host "Stopping old services..."
+          Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name "caddy" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          Write-Host "Services stopped"
 
-          taskkill /F /IM caddy.exe >nul 2>&1
-          echo No caddy processes running
-
-          timeout /t 2 >nul
-
-      # 3. دانلود Caddy
-      - name: Download Caddy
-        shell: cmd
+      # 3. دانلود Caddy اگر وجود ندارد
+      - name: Setup Caddy
+        shell: pwsh
         run: |
-          if not exist "caddy\caddy.exe" (
-            echo Downloading Caddy...
-            curl -L https://github.com/caddyserver/caddy/releases/download/v2.7.6/caddy_2.7.6_windows_amd64.zip -o caddy.zip
-            tar -xf caddy.zip -C caddy_temp
-            mkdir caddy 2>nul
-            move caddy_temp\caddy.exe caddy\ 2>nul
-            rmdir /s /q caddy_temp 2>nul
-            del caddy.zip 2>nul
-            echo Caddy downloaded
-          ) else (
-            echo Caddy already exists
-          )
+          $caddyPath = "caddy\caddy.exe"
 
-      # 4. نصب و اجرای Backend
-      - name: Setup Backend
-        shell: cmd
+          if (-not (Test-Path $caddyPath)) {
+              Write-Host "Downloading Caddy..."
+              $downloadUrl = "https://github.com/caddyserver/caddy/releases/download/v2.7.6/caddy_2.7.6_windows_amd64.zip"
+              $zipFile = "caddy.zip"
+              
+              Invoke-WebRequest -Uri $downloadUrl -OutFile $zipFile
+              Expand-Archive -Path $zipFile -DestinationPath "caddy_temp" -Force
+              
+              New-Item -ItemType Directory -Path "caddy" -Force | Out-Null
+              Move-Item -Path "caddy_temp\caddy.exe" -Destination "caddy\" -Force
+              
+              Remove-Item -Path $zipFile -Force
+              Remove-Item -Path "caddy_temp" -Recurse -Force
+              
+              Write-Host "Caddy downloaded successfully"
+          } else {
+              Write-Host "Caddy already exists"
+          }
+
+      # 4. اجرای Backend
+      - name: Start Backend
+        shell: pwsh
         run: |
-          cd backend
-          call npm install
+          Set-Location "backend"
 
-          echo Starting backend...
-          start /B node server.js
+          Write-Host "Installing backend dependencies..."
+          npm install
 
-          timeout /t 5 >nul
+          Write-Host "Starting backend server..."
+          $backendJob = Start-Job -ScriptBlock {
+              Set-Location "backend"
+              node server.js
+          }
 
-          echo Testing backend...
-          curl http://localhost:3001/api/hello || echo Backend might be starting...
+          Write-Host "Backend starting (PID: $($backendJob.Id))"
+          Start-Sleep -Seconds 5
+
+          # تست Backend
+          try {
+              $response = Invoke-RestMethod -Uri "http://localhost:3001/api/hello" -TimeoutSec 10
+              Write-Host "✅ Backend is running: $($response.message)"
+          } catch {
+              Write-Host "⚠️ Backend test failed, but continuing..."
+          }
 
       # 5. ساخت Frontend
       - name: Build Frontend
-        shell: cmd
+        shell: pwsh
         run: |
-          cd frontend
-          call npm install
-          call npm run build
+          Set-Location "frontend"
 
-          if exist "dist\index.html" (
-            echo Frontend built successfully
-          ) else (
-            echo ERROR: Frontend build failed!
-            exit 1
-          )
+          Write-Host "Installing frontend dependencies..."
+          npm install
 
-      # 6. کپی فایل‌های Frontend
-      - name: Copy Frontend Files
-        shell: cmd
-        run: |
-          mkdir caddy\www 2>nul
-          xcopy /E /Y frontend\dist\* caddy\www\ >nul
-          echo Frontend files copied
+          Write-Host "Building frontend..."
+          npm run build
 
-      # 7. ایجاد فایل Caddyfile
+          # بررسی Build
+          if (Test-Path "dist\index.html") {
+              Write-Host "✅ Frontend build successful"
+              
+              # کپی فایل‌ها به پوشه Caddy
+              $wwwPath = "..\caddy\www"
+              New-Item -ItemType Directory -Path $wwwPath -Force | Out-Null
+              Copy-Item -Path "dist\*" -Destination $wwwPath -Recurse -Force
+              Write-Host "Frontend files copied to caddy\www"
+          } else {
+              Write-Host "❌ Frontend build failed - index.html not found"
+              exit 1
+          }
+
+      # 6. ایجاد فایل Caddyfile
       - name: Create Caddyfile
-        shell: cmd
+        shell: pwsh
         run: |
-          echo :8080 { > caddy\Caddyfile
-          echo   root * ./www >> caddy\Caddyfile
-          echo   file_server >> caddy\Caddyfile
-          echo   try_files {path} /index.html >> caddy\Caddyfile
-          echo. >> caddy\Caddyfile
-          echo   handle /api/* { >> caddy\Caddyfile
-          echo     reverse_proxy localhost:3001 >> caddy\Caddyfile
-          echo   } >> caddy\Caddyfile
-          echo } >> caddy\Caddyfile
-          echo Caddyfile created
+          $caddyConfig = @"
+          :8080 {
+              root * ./www
+              file_server
+              try_files {path} /index.html
+              
+              handle /api/* {
+                  reverse_proxy localhost:3001
+              }
+          }
+          "@
 
-      # 8. اجرای Caddy
+          $caddyfilePath = "caddy\Caddyfile"
+          $caddyConfig | Out-File -FilePath $caddyfilePath -Encoding UTF8
+          Write-Host "Caddyfile created at $caddyfilePath"
+
+      # 7. اجرای Caddy
       - name: Run Caddy
-        shell: cmd
+        shell: pwsh
         run: |
-          cd caddy
-          echo Starting Caddy on port 8080...
-          start /B caddy.exe run --config Caddyfile
+          Set-Location "caddy"
 
-          timeout /t 5 >nul
+          Write-Host "Starting Caddy server on port 8080..."
 
-          echo Testing Caddy...
-          curl http://localhost:8080 || echo Caddy might be starting...
+          # اجرای Caddy
+          $caddyProcess = Start-Process -FilePath ".\caddy.exe" `
+            -ArgumentList "run --config Caddyfile" `
+            -PassThru `
+            -NoNewWindow
 
-      # 9. نمایش وضعیت نهایی
-      - name: Final Status
-        shell: cmd
+          Write-Host "Caddy started (PID: $($caddyProcess.Id))"
+          Start-Sleep -Seconds 5
+
+          # تست Caddy
+          try {
+              $response = Invoke-WebRequest -Uri "http://localhost:8080" -UseBasicParsing
+              Write-Host "✅ Caddy is running (HTTP $($response.StatusCode))"
+          } catch {
+              Write-Host "⚠️ Caddy test failed, checking status..."
+          }
+
+      # 8. نمایش وضعیت نهایی
+      - name: Show Final Status
+        shell: pwsh
         run: |
-          echo ====================================
-          echo 🚀 DEPLOYMENT COMPLETE
-          echo ====================================
-          echo.
-          echo 🔍 Checking services...
-          echo.
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "🚀 DEPLOYMENT COMPLETE"
+          Write-Host "=========================================="
+          Write-Host ""
 
-          echo 1. Listening ports:
-          netstat -ano | findstr ":8080 :3001" || echo Ports not found yet...
-          echo.
+          # 1. بررسی پورت‌ها
+          Write-Host "1. NETWORK PORTS:"
+          Write-Host "-----------------"
+          $ports = @(8080, 3001)
+          foreach ($port in $ports) {
+              $result = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
+              if ($result) {
+                  Write-Host "Port $port : LISTENING ✅"
+              } else {
+                  Write-Host "Port $port : NOT LISTENING ❌"
+              }
+          }
 
-          echo 2. Running processes:
-          tasklist | findstr "node.exe caddy.exe" || echo Processes starting...
-          echo.
+          # 2. بررسی Processها
+          Write-Host ""
+          Write-Host "2. RUNNING PROCESSES:"
+          Write-Host "---------------------"
+          $processes = Get-Process -Name "node", "caddy" -ErrorAction SilentlyContinue
+          if ($processes) {
+              $processes | Format-Table Id, Name, @{Name="WorkingSet(MB)";Expression={[math]::Round($_.WorkingSet/1MB,2)}} -AutoSize
+          } else {
+              Write-Host "No processes found"
+          }
 
-          echo 3. Frontend files:
-          dir caddy\www 2>nul || echo www folder not found
-          echo.
+          # 3. بررسی فایل‌ها
+          Write-Host ""
+          Write-Host "3. FRONTEND FILES:"
+          Write-Host "------------------"
+          $wwwPath = "caddy\www"
+          if (Test-Path $wwwPath) {
+              Get-ChildItem -Path $wwwPath | Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize
+          } else {
+              Write-Host "Frontend files not found"
+          }
 
-          echo 4. Access URLs:
-          echo    Frontend: http://localhost:8080
-          echo    Backend API: http://localhost:3001/api/hello
-          echo.
-          echo 5. Manual test commands:
-          echo    curl http://localhost:8080
-          echo    curl http://localhost:3001/api/hello
-          echo.
-          echo ====================================
+          # 4. دستورات تست
+          Write-Host ""
+          Write-Host "4. TEST COMMANDS:"
+          Write-Host "-----------------"
+          Write-Host "Frontend:  Invoke-WebRequest http://localhost:8080"
+          Write-Host "Backend:   Invoke-RestMethod http://localhost:3001/api/hello"
+          Write-Host ""
+          Write-Host "5. MANUAL CHECK:"
+          Write-Host "----------------"
+          Write-Host "1. Open browser to: http://localhost:8080"
+          Write-Host "2. Test API: http://localhost:3001/api/hello"
+          Write-Host ""
+          Write-Host "=========================================="
+
+      # 9. تست اتصال (اختیاری)
+      - name: Quick Test
+        shell: pwsh
+        run: |
+          Write-Host "Running quick tests..."
+
+          # تست Backend
+          Write-Host "Testing Backend..."
+          try {
+              $backendResult = Invoke-RestMethod -Uri "http://localhost:3001/api/hello" -TimeoutSec 5
+              Write-Host "✅ Backend API: $($backendResult.message)"
+          } catch {
+              Write-Host "❌ Backend API failed"
+          }
+
+          # تست Frontend
+          Write-Host "Testing Frontend..."
+          try {
+              $frontendResult = Invoke-WebRequest -Uri "http://localhost:8080" -UseBasicParsing -TimeoutSec 5
+              Write-Host "✅ Frontend: HTTP $($frontendResult.StatusCode)"
+          } catch {
+              Write-Host "❌ Frontend failed"
+          }
