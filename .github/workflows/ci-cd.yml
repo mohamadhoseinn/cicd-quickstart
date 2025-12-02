@@ -1,4 +1,4 @@
-name: CI/CD with Caddy
+name: CI/CD Windows
 
 on:
   push:
@@ -6,97 +6,138 @@ on:
       - main
 
 jobs:
-  build-and-deploy:
+  build-deploy:
     runs-on: self-hosted
 
     steps:
-      # دریافت کد
-      - name: Checkout repository
+      # 1. دریافت کد
+      - name: Checkout
         uses: actions/checkout@v3
 
-      # 1. توقف سرویس‌های قبلی
-      - name: Stop old services
+      # 2. توقف سرویس‌های قبلی
+      - name: Stop Old Services
+        shell: cmd
         run: |
-          taskkill /F /IM node.exe /T 2>nul || echo "No node processes"
-          taskkill /F /IM caddy.exe /T 2>nul || echo "No caddy processes"
-          timeout /t 3 /nobreak
+          taskkill /F /IM node.exe >nul 2>&1
+          echo No node processes running
 
-      # 2. دانلود Caddy (اگر نیاز است)
-      - name: Setup Caddy
+          taskkill /F /IM caddy.exe >nul 2>&1
+          echo No caddy processes running
+
+          timeout /t 2 >nul
+
+      # 3. دانلود Caddy
+      - name: Download Caddy
+        shell: cmd
         run: |
-          if (-Not (Test-Path "caddy\caddy.exe")) {
-            echo "Downloading Caddy..."
-            Invoke-WebRequest "https://github.com/caddyserver/caddy/releases/download/v2.7.6/caddy_2.7.6_windows_amd64.zip" -OutFile caddy.zip
-            Expand-Archive caddy.zip -DestinationPath .\caddy_temp
-            mkdir caddy -Force
-            Move-Item .\caddy_temp\caddy.exe .\caddy\
-            Remove-Item caddy.zip, caddy_temp -Recurse -Force
-          }
+          if not exist "caddy\caddy.exe" (
+            echo Downloading Caddy...
+            curl -L https://github.com/caddyserver/caddy/releases/download/v2.7.6/caddy_2.7.6_windows_amd64.zip -o caddy.zip
+            tar -xf caddy.zip -C caddy_temp
+            mkdir caddy 2>nul
+            move caddy_temp\caddy.exe caddy\ 2>nul
+            rmdir /s /q caddy_temp 2>nul
+            del caddy.zip 2>nul
+            echo Caddy downloaded
+          ) else (
+            echo Caddy already exists
+          )
 
-      # 3. اجرای Backend
-      - name: Start Backend
+      # 4. نصب و اجرای Backend
+      - name: Setup Backend
+        shell: cmd
         run: |
           cd backend
-          npm install
+          call npm install
 
-          # اجرای backend در پس‌زمینه
-          $backend = Start-Process node -ArgumentList "server.js" -PassThru -WindowStyle Hidden
-          $backend.Id | Out-File "..\backend_pid.txt"
+          echo Starting backend...
+          start /B node server.js
 
-          # منتظر بمان
-          timeout /t 5 /nobreak
+          timeout /t 5 >nul
 
-          # تست backend
-          curl http://localhost:3001/api/hello || echo "Backend test failed"
+          echo Testing backend...
+          curl http://localhost:3001/api/hello || echo Backend might be starting...
 
-      # 4. Build Frontend
+      # 5. ساخت Frontend
       - name: Build Frontend
+        shell: cmd
         run: |
           cd frontend
-          npm install
-          npm run build
+          call npm install
+          call npm run build
 
-          # کپی به پوشه Caddy
-          mkdir ..\caddy\www -Force
-          Copy-Item dist\* ..\caddy\www -Recurse -Force
+          if exist "dist\index.html" (
+            echo Frontend built successfully
+          ) else (
+            echo ERROR: Frontend build failed!
+            exit 1
+          )
 
-      # 5. اجرای Caddy
-      - name: Start Caddy
+      # 6. کپی فایل‌های Frontend
+      - name: Copy Frontend Files
+        shell: cmd
+        run: |
+          mkdir caddy\www 2>nul
+          xcopy /E /Y frontend\dist\* caddy\www\ >nul
+          echo Frontend files copied
+
+      # 7. ایجاد فایل Caddyfile
+      - name: Create Caddyfile
+        shell: cmd
+        run: |
+          echo :8080 { > caddy\Caddyfile
+          echo   root * ./www >> caddy\Caddyfile
+          echo   file_server >> caddy\Caddyfile
+          echo   try_files {path} /index.html >> caddy\Caddyfile
+          echo. >> caddy\Caddyfile
+          echo   handle /api/* { >> caddy\Caddyfile
+          echo     reverse_proxy localhost:3001 >> caddy\Caddyfile
+          echo   } >> caddy\Caddyfile
+          echo } >> caddy\Caddyfile
+          echo Caddyfile created
+
+      # 8. اجرای Caddy
+      - name: Run Caddy
+        shell: cmd
         run: |
           cd caddy
+          echo Starting Caddy on port 8080...
+          start /B caddy.exe run --config Caddyfile
 
-          # مطمئن شو Caddyfile وجود دارد
-          if (-Not (Test-Path "Caddyfile")) {
-            @'
-            :8080 {
-                root * ./www
-                file_server
-                try_files {path} /index.html
-                
-                handle /api/* {
-                    reverse_proxy localhost:3001
-                }
-            }
-            '@ | Out-File Caddyfile -Encoding UTF8
-          }
+          timeout /t 5 >nul
 
-          # اجرای Caddy
-          Start-Process ".\caddy.exe" -ArgumentList "run --config Caddyfile" -WindowStyle Hidden
+          echo Testing Caddy...
+          curl http://localhost:8080 || echo Caddy might be starting...
 
-          # منتظر بمان
-          timeout /t 5 /nobreak
-
-          # تست Caddy
-          curl http://localhost:8080 || echo "Caddy test failed"
-
-      # 6. نمایش وضعیت
-      - name: Show Status
+      # 9. نمایش وضعیت نهایی
+      - name: Final Status
+        shell: cmd
         run: |
-          echo "=== Checking Services ==="
-          echo "Backend PID:"; Get-Content backend_pid.txt -ErrorAction SilentlyContinue
-          echo ""
-          echo "=== Ports ==="
-          netstat -ano | findstr ":8080 :3001" || echo "Ports not found"
-          echo ""
-          echo "=== Processes ==="
-          tasklist | findstr "node.exe caddy.exe" || echo "Processes not found"
+          echo ====================================
+          echo 🚀 DEPLOYMENT COMPLETE
+          echo ====================================
+          echo.
+          echo 🔍 Checking services...
+          echo.
+
+          echo 1. Listening ports:
+          netstat -ano | findstr ":8080 :3001" || echo Ports not found yet...
+          echo.
+
+          echo 2. Running processes:
+          tasklist | findstr "node.exe caddy.exe" || echo Processes starting...
+          echo.
+
+          echo 3. Frontend files:
+          dir caddy\www 2>nul || echo www folder not found
+          echo.
+
+          echo 4. Access URLs:
+          echo    Frontend: http://localhost:8080
+          echo    Backend API: http://localhost:3001/api/hello
+          echo.
+          echo 5. Manual test commands:
+          echo    curl http://localhost:8080
+          echo    curl http://localhost:3001/api/hello
+          echo.
+          echo ====================================
