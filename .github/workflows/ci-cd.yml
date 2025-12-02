@@ -1,0 +1,54 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  build-and-deploy:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "22.14.0"
+
+      # نصب وابستگی‌های بک‌اند
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          npm install
+
+      # نصب وابستگی‌های فرانت‌اند
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm install
+
+      # بیلد فرانت‌اند
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
+
+      # کپی خروجی فرانت به مسیر درست برای Caddy
+      - name: Copy frontend build to Caddy folder
+        run: |
+          Copy-Item -Path frontend/dist/* -Destination caddy/frontend/dist -Recurse -Force
+
+      # راه‌اندازی بک‌اند با npm script
+      - name: Restart backend
+        run: |
+          Stop-Process -Name "node" -ErrorAction SilentlyContinue
+          cd backend
+          Start-Process "npm" -ArgumentList "start"
+
+      # راه‌اندازی Caddy از داخل فولدر caddy
+      - name: Restart Caddy
+        run: |
+          Stop-Process -Name "caddy" -ErrorAction SilentlyContinue
+          Start-Process ".\caddy\caddy.exe" -ArgumentList "run --config caddy/Caddyfile"

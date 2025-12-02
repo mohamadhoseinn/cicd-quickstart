@@ -1,0 +1,9 @@
+:80 {
+    root * ./frontend/dist
+    file_server
+    try_files {path} /index.html
+}
+
+:80/api/* {
+    reverse_proxy localhost:3001
+}

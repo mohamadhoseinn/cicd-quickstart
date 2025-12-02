@@ -1,0 +1,29 @@
+# Node.js dependencies
+node_modules/
+
+# Build outputs
+frontend/dist/
+caddy/frontend/dist/
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.local
+
+# Temporary files
+*.tmp
+*.swp
+
+# Ignore Caddy executable
+caddy/caddy.exe
