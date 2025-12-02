@@ -53,11 +53,16 @@ jobs:
       # کپی خروجی build به پوشه‌ی Caddy
       - name: Copy frontend build to Caddy folder
         run: |
-          Remove-Item -Recurse -Force caddy/frontend/dist -ErrorAction SilentlyContinue
-          Copy-Item -Path frontend/dist -Destination caddy/frontend/dist -Recurse
+          if (Test-Path "frontend/dist") {
+            Remove-Item -Recurse -Force caddy/frontend/dist -ErrorAction SilentlyContinue
+            Copy-Item -Path frontend/dist -Destination caddy/frontend/dist -Recurse
+            Write-Host "Frontend build copied to Caddy folder."
+          } else {
+            Write-Error "Frontend build folder not found. Did npm run build succeed?"
+          }
 
       # اجرای مجدد Caddy برای دیدن تغییرات
       - name: Reload Caddy
         run: |
           Stop-Process -Name "caddy" -ErrorAction SilentlyContinue
-          Start-Process "D:\cicdproject\caddy\caddy.exe" -ArgumentList "run --config D:\cicdproject\caddy\Caddyfile"
+          Start-Process "caddy\caddy.exe" -ArgumentList "run --config caddy\Caddyfile"
