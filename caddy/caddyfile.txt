@@ -1,9 +1,13 @@
-:80 {
+:8080 {
+    # سرو کردن فرانت‌اند
     root * ./frontend/dist
     file_server
-    try_files {path} /index.html
-}
 
-:80/api/* {
-    reverse_proxy localhost:3001
+    # برای SPA مثل React یا Vue
+    try_files {path} /index.html
+
+    # پروکسی کردن درخواست‌های API
+    handle_path /api/* {
+        reverse_proxy localhost:3001
+    }
 }
