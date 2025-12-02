@@ -1,12 +1,9 @@
 :8080 {
-    # سرو کردن فرانت‌اند
-    root * ./frontend/dist
+    root * ./caddy/frontend/dist
     file_server
-
-    # برای SPA مثل React یا Vue
     try_files {path} /index.html
 
-    # پروکسی کردن درخواست‌های API
+    # اگر بک‌اند روی پورت 3001 داری
     handle_path /api/* {
         reverse_proxy localhost:3001
     }

@@ -10,6 +10,7 @@ jobs:
     runs-on: self-hosted # اجرا روی ویندوز خودت
 
     steps:
+      # دریافت کد از مخزن
       - name: Checkout repository
         uses: actions/checkout@v3
 
@@ -20,7 +21,7 @@ jobs:
           path: caddy/caddy.exe
           key: caddy-exe
 
-      # دانلود فقط اگر فایل وجود نداشت
+      # دانلود Caddy فقط اگر وجود نداشت
       - name: Ensure Caddy exists
         run: |
           if (-Not (Test-Path "caddy\caddy.exe")) {
@@ -43,23 +44,36 @@ jobs:
           Stop-Process -Name "node" -ErrorAction SilentlyContinue
           Start-Process "node" -ArgumentList "backend/server.js"
 
+      # پاک‌سازی خروجی قدیمی فرانت
+      - name: Clean old frontend build
+        run: |
+          if (Test-Path "frontend/dist") {
+            Remove-Item -Recurse -Force frontend/dist
+            Write-Host "Old dist folder removed."
+          }
+
       # نصب و build فرانت‌اند
-      - name: Install frontend dependencies
+      - name: Build frontend
         run: |
           cd frontend
           npm install
-          npm run build
+          npm run build --verbose
+
+      # بررسی موفقیت build
+      - name: Verify dist folder
+        run: |
+          if (Test-Path "frontend/dist/index.html") {
+            Write-Host "✅ Build succeeded, dist folder found."
+          } else {
+            Write-Error "❌ Build failed, dist folder missing."
+          }
 
       # کپی خروجی build به پوشه‌ی Caddy
       - name: Copy frontend build to Caddy folder
         run: |
-          if (Test-Path "frontend/dist") {
-            Remove-Item -Recurse -Force caddy/frontend/dist -ErrorAction SilentlyContinue
-            Copy-Item -Path frontend/dist -Destination caddy/frontend/dist -Recurse
-            Write-Host "Frontend build copied to Caddy folder."
-          } else {
-            Write-Error "Frontend build folder not found. Did npm run build succeed?"
-          }
+          Remove-Item -Recurse -Force caddy/frontend/dist -ErrorAction SilentlyContinue
+          Copy-Item -Path frontend/dist -Destination caddy/frontend/dist -Recurse
+          Write-Host "Frontend build copied to Caddy folder."
 
       # اجرای مجدد Caddy برای دیدن تغییرات
       - name: Reload Caddy
