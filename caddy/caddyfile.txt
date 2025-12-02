@@ -1,9 +1,9 @@
 :8080 {
-    root * ./caddy/frontend/dist
+    # مسیر صحیح
+    root * ./frontend/dist
     file_server
     try_files {path} /index.html
 
-    # اگر بک‌اند روی پورت 3001 داری
     handle_path /api/* {
         reverse_proxy localhost:3001
     }
