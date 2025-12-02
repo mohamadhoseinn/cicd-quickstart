@@ -22,12 +22,12 @@ jobs:
       - name: Ensure Caddy exists
         run: |
           if (-Not (Test-Path "caddy\caddy.exe")) {
-            Write-Host "Caddy not found in cache, downloading..."
-            Invoke-WebRequest https://caddyserver.com/api/download?os=windows&arch=amd64 -OutFile caddy.exe
-            mkdir caddy -Force
-            Move-Item caddy.exe caddy\
+           Write-Host "Caddy not found in cache, downloading..."
+           Invoke-WebRequest "https://caddyserver.com/api/download?os=windows&arch=amd64" -OutFile caddy.exe
+          `mkdir caddy -Force
+           Move-Item caddy.exe caddy\
           } else {
-            Write-Host "Caddy found in cache, skipping download."
+          Write-Host "Caddy found in cache, skipping download."
           }
 
       - name: Install backend dependencies
