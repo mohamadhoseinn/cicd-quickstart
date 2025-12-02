@@ -1,54 +1,57 @@
-name: CI/CD Pipeline
+name: CI/CD with Caddy (cached)
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main # هر بار که روی برنچ main پوش کنی اجرا میشه
 
 jobs:
   build-and-deploy:
-    runs-on: windows-latest
+    runs-on: self-hosted # اجرا روی ویندوز خودت
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
+      - name: Cache Caddy
+        uses: actions/cache@v3
         with:
-          node-version: "22.14.0"
+          path: caddy/caddy.exe
+          key: caddy-exe
 
-      # نصب وابستگی‌های بک‌اند
+      - name: Ensure Caddy exists
+        run: |
+          if (-Not (Test-Path "caddy\caddy.exe")) {
+            Write-Host "Caddy not found in cache, downloading..."
+            Invoke-WebRequest https://caddyserver.com/api/download?os=windows&arch=amd64 -OutFile caddy.exe
+            mkdir caddy -Force
+            Move-Item caddy.exe caddy\
+          } else {
+            Write-Host "Caddy found in cache, skipping download."
+          }
+
       - name: Install backend dependencies
         run: |
           cd backend
           npm install
 
-      # نصب وابستگی‌های فرانت‌اند
+      - name: Start backend
+        run: |
+          Stop-Process -Name "node" -ErrorAction SilentlyContinue
+          Start-Process "node" -ArgumentList "backend/server.js"
+
       - name: Install frontend dependencies
         run: |
           cd frontend
           npm install
-
-      # بیلد فرانت‌اند
-      - name: Build frontend
-        run: |
-          cd frontend
           npm run build
 
-      # کپی خروجی فرانت به مسیر درست برای Caddy
       - name: Copy frontend build to Caddy folder
         run: |
-          Copy-Item -Path frontend/dist/* -Destination caddy/frontend/dist -Recurse -Force
+          Remove-Item -Recurse -Force caddy/frontend/dist -ErrorAction SilentlyContinue
+          Copy-Item -Path frontend/dist -Destination caddy/frontend/dist -Recurse
 
-      # راه‌اندازی بک‌اند با npm script
-      - name: Restart backend
-        run: |
-          Stop-Process -Name "node" -ErrorAction SilentlyContinue
-          cd backend
-          Start-Process "npm" -ArgumentList "start"
-
-      # راه‌اندازی Caddy از داخل فولدر caddy
-      - name: Restart Caddy
+      - name: Run Caddy
         run: |
           Stop-Process -Name "caddy" -ErrorAction SilentlyContinue
           Start-Process ".\caddy\caddy.exe" -ArgumentList "run --config caddy/Caddyfile"
